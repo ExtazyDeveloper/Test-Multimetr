@@ -11,7 +11,7 @@ public sealed class HoverOutlineController : MonoBehaviour
     [SerializeField] private Color hoverEmissionColor;
     // Интенсивность эмиссии при наведении (в линейном пространстве; конвертируем в gamma)
     [SerializeField] private float hoverEmissionIntensity;
-    [SerializeField] private float rotationSpeedY = 120f;
+		[SerializeField] private int totalSlots = 7;
 
     // Текущий подсвеченный рендерер
     private Renderer currentRenderer;
@@ -19,6 +19,8 @@ public sealed class HoverOutlineController : MonoBehaviour
     private MaterialPropertyBlock block;
     // Запоминаем исходный эмиссивный цвет, чтобы корректно восстановить
     private Color baseEmission;
+		private float baseY;
+		private int currentStep;
 
     private void Awake()
     {
@@ -42,6 +44,8 @@ public sealed class HoverOutlineController : MonoBehaviour
                 currentRenderer = targetRenderer;
                 // Сохраняем базовый эмиссивный цвет материала (текстура эмиссии остаётся нетронутой)
                 baseEmission = currentRenderer.sharedMaterial.GetColor("_EmissionColor");
+				baseY = currentRenderer.transform.localEulerAngles.y;
+				currentStep = 0;
 
                 // Усиливаем эмиссию через MaterialPropertyBlock (не создаём копий материалов)
                 currentRenderer.GetPropertyBlock(block);
@@ -55,7 +59,18 @@ public sealed class HoverOutlineController : MonoBehaviour
             var scrollY = Mouse.current.scroll.ReadValue().y;
             if (scrollY != 0f)
             {
-                targetRenderer.transform.Rotate(0f, scrollY * rotationSpeedY * Time.deltaTime, 0f, Space.Self);
+				var dir = scrollY > 0f ? 1 : -1;
+				var maxIndex = Mathf.Max(2, totalSlots) - 1; // при 7 слотах: индексы 0..6
+				var nextStep = Mathf.Clamp(currentStep + dir, 0, maxIndex);
+				if (nextStep != currentStep)
+				{
+					currentStep = nextStep;
+					var stepDeg = 180f / (Mathf.Max(2, totalSlots) - 1); // при 7: 180/6 = 30°
+					var nextY = baseY + currentStep * stepDeg;
+					var t = targetRenderer.transform;
+					var e = t.localEulerAngles;
+					t.localEulerAngles = new Vector3(e.x, nextY, e.z);
+				}
             }
             return;
         }
