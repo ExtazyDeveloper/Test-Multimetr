@@ -11,7 +11,7 @@ public sealed class HoverOutlineController : MonoBehaviour
     [SerializeField] private Color hoverEmissionColor;
     // Интенсивность эмиссии при наведении (в линейном пространстве; конвертируем в gamma)
     [SerializeField] private float hoverEmissionIntensity;
-		[SerializeField] private int totalSlots = 7;
+	[SerializeField] private int totalSlots = 7;
 
     // Текущий подсвеченный рендерер
     private Renderer currentRenderer;
