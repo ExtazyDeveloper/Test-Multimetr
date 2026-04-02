@@ -30,8 +30,8 @@ public static class DialGeometry
     // Устанавливает локальный угол Y трансформа в соответствии с номером шага.
     public static void ApplyLocalY(Transform target, float referenceY, int step, int totalSlots)
     {
-        var y = referenceY + step * StepDegrees(totalSlots);
-        var e = target.localEulerAngles;
-        target.localEulerAngles = new Vector3(e.x, y, e.z);
+        var yAngle = referenceY + step * StepDegrees(totalSlots);
+        var currentEuler = target.localEulerAngles;
+        target.localEulerAngles = new Vector3(currentEuler.x, yAngle, currentEuler.z);
     }
 }

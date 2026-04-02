@@ -1,8 +1,5 @@
 using TMPro;
 
-/// <summary>
-/// Отображает числовое показание и двухстрочный блок «режим + показание» в назначенных TMP_Text без логики расчёта.
-/// </summary>
 public sealed class MultimeterDisplayView
 {
     private readonly TMP_Text _reading;
@@ -24,7 +21,7 @@ public sealed class MultimeterDisplayView
         if (_reading != null)
             _reading.text = snapshot.Reading;
         if (_combined != null)
-            _combined.text = snapshot.CombinedLine;
+            _combined.text = BuildCombinedLine(snapshot.Mode, snapshot.Reading);
     }
 
     // Очищает оба привязанных текста.
@@ -34,5 +31,10 @@ public sealed class MultimeterDisplayView
             _reading.text = string.Empty;
         if (_combined != null)
             _combined.text = string.Empty;
+    }
+
+    private static string BuildCombinedLine(string mode, string reading)
+    {
+        return "Режим: " + mode + "\nПоказание: " + reading;
     }
 }
