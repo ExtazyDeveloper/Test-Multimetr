@@ -10,87 +10,116 @@ using UnityEngine.InputSystem;
 public sealed class MultimeterHoverEmissionController : MonoBehaviour
 {
     private const float ReferenceLocalYForStep0 = 0f;
+	private static readonly int EmissionColorId = Shader.PropertyToID("_EmissionColor");
 
     [SerializeField] private Camera raycastCamera;
+	[ColorUsage(false, true)]
     [SerializeField] private Color hoverEmissionColor;
     [SerializeField] private float hoverEmissionIntensity;
     [SerializeField] private TMP_Text displayValueText;
-    [SerializeField] private TMP_Text UIModeAndValueText;
+    [SerializeField] private TMP_Text uiModeAndValueText;
     [SerializeField] private Renderer primaryDialRenderer;
+	[SerializeField] private float raycastMaxDistance = 100f;
 
     private MaterialPropertyBlock _block;
     private MultimeterDisplayView _view;
 
-    private Renderer _hoverRenderer;
     private Color _baseEmission;
+	private Color[] _baseEmissionPerMat;
+	private bool _prevEmissionKeywordEnabled;
+	private bool[] _prevEmissionKeywordEnabledPerMat;
 
-    private bool _dialRegistered;
+	private bool _isHovered;
     private int _dialStep;
+	private int _dialLayerMask;
 
     // Создаёт блок свойств материала и представление для текстов.
     private void Awake()
     {
-        _block = new MaterialPropertyBlock();
-        _view = new MultimeterDisplayView(displayValueText, UIModeAndValueText);
+		if (raycastCamera == null || primaryDialRenderer == null ||
+			displayValueText == null || uiModeAndValueText == null)
+		{
+			enabled = false;
+			return;
+		}
+
+		_block = new MaterialPropertyBlock();
+		_view = new MultimeterDisplayView(displayValueText, uiModeAndValueText);
     }
 
     // При включении объекта в режиме игры синхронизирует диск и UI.
     private void OnEnable()
     {
         if (!Application.isPlaying) return;
-        InitDialFromPrimary();
-    }
-
-    // На следующий кадр повторно инициализирует UI (после готовности TMP).
-    private void Start()
-    {
-        StartCoroutine(RefreshUiNextFrame());
-    }
-
-    // Ждёт один кадр и вызывает полную инициализацию диска и показаний.
-    private IEnumerator RefreshUiNextFrame()
-    {
-        yield return null;
-        InitDialFromPrimary();
+		InitDialFromPrimary();
+		// Обычно достаточно, чтобы UI был готов в тот же кадр
+		displayValueText.ForceMeshUpdate();
+		uiModeAndValueText.ForceMeshUpdate();
+		RefreshReadoutUi();
     }
 
     // Регистрирует текущее положение диска и обновляет отображаемые значения.
     private void InitDialFromPrimary()
     {
-        RegisterDialIfNeeded(primaryDialRenderer);
-        RefreshReadoutUi();
+		_dialStep = MultimeterReadoutCalculator.ClampStepIndex(
+			DialGeometry.StepFromAngle(ReferenceLocalYForStep0, primaryDialRenderer.transform.localEulerAngles.y, MultimeterReadoutCalculator.SlotCount));
+		DialGeometry.ApplyLocalY(primaryDialRenderer.transform, ReferenceLocalYForStep0, _dialStep, MultimeterReadoutCalculator.SlotCount);
+
+		// Кэш базовой эмиссии с инстанса материала
+		var mats = primaryDialRenderer.materials;
+		var count = mats.Length;
+		if (count == 0)
+		{
+			var mat = primaryDialRenderer.material;
+			_baseEmission = mat.GetColor(EmissionColorId);
+			_prevEmissionKeywordEnabled = mat.IsKeywordEnabled("_EMISSION");
+			_baseEmissionPerMat = null;
+			_prevEmissionKeywordEnabledPerMat = null;
+		}
+		else
+		{
+			_baseEmissionPerMat = new Color[count];
+			_prevEmissionKeywordEnabledPerMat = new bool[count];
+			for (int i = 0; i < count; i++)
+			{
+				_baseEmissionPerMat[i] = mats[i].GetColor(EmissionColorId);
+				_prevEmissionKeywordEnabledPerMat[i] = mats[i].IsKeywordEnabled("_EMISSION");
+			}
+			// На случай использования SetPropertyBlock без индекса как фоллбэка
+			_baseEmission = _baseEmissionPerMat[0];
+			_prevEmissionKeywordEnabled = _prevEmissionKeywordEnabledPerMat[0];
+		}
+
+		// Формируем маску слоёв из всех коллайдеров диска (и детей)
+		_dialLayerMask = 0;
+		var colliders = primaryDialRenderer.GetComponentsInChildren<Collider>(true);
+		for (int i = 0; i < colliders.Length; i++)
+		{
+			_dialLayerMask |= 1 << colliders[i].gameObject.layer;
+		}
+		// Фоллбэк: если коллайдеров нет, используем слой объекта рендера
+		if (_dialLayerMask == 0)
+		{
+			_dialLayerMask = 1 << primaryDialRenderer.gameObject.layer;
+		}
     }
 
     // Каждый кадр: луч по курсору, подсветка при наведении на диск, колесо для смены шага.
     private void Update()
     {
-        if (Mouse.current == null || raycastCamera == null || primaryDialRenderer == null)
+		if (Mouse.current == null || raycastCamera == null || primaryDialRenderer == null)
             return;
 
         var ray = raycastCamera.ScreenPointToRay(Mouse.current.position.ReadValue());
 
-        if (!TryRaycastPrimaryDial(ray, out _))
-        {
-            ClearHoverHighlight();
-            return;
-        }
-
-        if (primaryDialRenderer != _hoverRenderer)
-        {
-            ClearHoverHighlight();
-            _hoverRenderer = primaryDialRenderer;
-            CacheBaseEmission(primaryDialRenderer);
-            RegisterDialIfNeeded(primaryDialRenderer);
-            ApplyHoverHighlight(primaryDialRenderer);
-            RefreshReadoutUi();
-        }
+		var isHit = Physics.Raycast(ray, out _, raycastMaxDistance, _dialLayerMask, QueryTriggerInteraction.Collide);
+		if (isHit != _isHovered) SetHover(isHit);
 
         var scrollY = Mouse.current.scroll.ReadValue().y;
-        if (scrollY != 0f && _dialRegistered)
+		if (scrollY != 0f)
         {
             var dir = scrollY > 0f ? 1 : -1;
-            var next = Mathf.Clamp(_dialStep + dir, 0, DialGeometry.MaxStepIndex(MultimeterReadoutCalculator.SlotCount));
-            next = MultimeterReadoutCalculator.ClampStepIndex(next);
+			var next = MultimeterReadoutCalculator.ClampStepIndex(_dialStep + dir);
             if (next != _dialStep)
             {
                 _dialStep = next;
@@ -100,60 +129,58 @@ public sealed class MultimeterHoverEmissionController : MonoBehaviour
         }
     }
 
-    // Запоминает исходный цвет эмиссии материала до подсветки.
-    private void CacheBaseEmission(Renderer r)
+	private void SetHover(bool hovered)
     {
-        _baseEmission = r.sharedMaterial.GetColor("_EmissionColor");
-    }
+		_isHovered = hovered;
 
-    // Задаёт цвет эмиссии при наведении и включает ключевое слово EMISSION.
-    private void ApplyHoverHighlight(Renderer r)
-    {
-        r.GetPropertyBlock(_block);
-        var hoverEmission = hoverEmissionColor * hoverEmissionIntensity;
-        _block.SetColor("_EmissionColor", hoverEmission);
-        r.SetPropertyBlock(_block);
-        r.sharedMaterial.EnableKeyword("_EMISSION");
-    }
+		// Обновляем цвет через MaterialPropertyBlock для всех материалов рендера
+		var mats = primaryDialRenderer.materials;
+		var count = mats.Length;
+		if (count <= 1)
+		{
+			primaryDialRenderer.GetPropertyBlock(_block);
+			var color = hovered ? hoverEmissionColor * hoverEmissionIntensity : _baseEmission;
+			_block.SetColor(EmissionColorId, color);
+			primaryDialRenderer.SetPropertyBlock(_block);
 
-    // Находит ближайшее к камере попадание луча по коллайдеру, относящемуся к диску.
-    private bool TryRaycastPrimaryDial(Ray ray, out RaycastHit hit)
-    {
-        hit = default;
-        if (primaryDialRenderer == null) return false;
+			// Управляем ключевым словом _EMISSION у инстанса материала
+			var mat = primaryDialRenderer.material;
+			var isEnabled = mat.IsKeywordEnabled("_EMISSION");
+			if (hovered)
+			{
+				if (!isEnabled) mat.EnableKeyword("_EMISSION");
+			}
+			else
+			{
+				if (isEnabled && !_prevEmissionKeywordEnabled)
+					mat.DisableKeyword("_EMISSION");
+			}
+		}
+		else
+		{
+			for (int i = 0; i < count; i++)
+			{
+				primaryDialRenderer.GetPropertyBlock(_block, i);
+				var baseCol = (_baseEmissionPerMat != null && i < _baseEmissionPerMat.Length) ? _baseEmissionPerMat[i] : _baseEmission;
+				var color = hovered ? hoverEmissionColor * hoverEmissionIntensity : baseCol;
+				_block.SetColor(EmissionColorId, color);
+				primaryDialRenderer.SetPropertyBlock(_block, i);
 
-        var hits = Physics.RaycastAll(ray, Mathf.Infinity);
-        var bestDist = float.MaxValue;
-        var found = false;
-        foreach (var h in hits)
-        {
-            if (!HitBelongsToDial(h, primaryDialRenderer)) continue;
-            if (h.distance >= bestDist) continue;
-            bestDist = h.distance;
-            hit = h;
-            found = true;
-        }
-
-        return found;
-    }
-
-    // Проверяет, что попадание относится к тому же объекту диска (сам или потомок/родитель).
-    private static bool HitBelongsToDial(RaycastHit hit, Renderer dial)
-    {
-        var c = hit.collider.transform;
-        var d = dial.transform;
-        return c == d || c.IsChildOf(d) || d.IsChildOf(c);
-    }
-
-    // Один раз вычисляет шаг по углу диска, выравнивает поворот и помечает диск как зарегистрированный.
-    private void RegisterDialIfNeeded(Renderer r)
-    {
-        if (r == null || r != primaryDialRenderer || _dialRegistered) return;
-
-        _dialStep = DialGeometry.StepFromAngle(ReferenceLocalYForStep0, r.transform.localEulerAngles.y, MultimeterReadoutCalculator.SlotCount);
-        _dialStep = MultimeterReadoutCalculator.ClampStepIndex(_dialStep);
-        _dialRegistered = true;
-        DialGeometry.ApplyLocalY(r.transform, ReferenceLocalYForStep0, _dialStep, MultimeterReadoutCalculator.SlotCount);
+				var mat = mats[i];
+				var isEnabled = mat.IsKeywordEnabled("_EMISSION");
+				if (hovered)
+				{
+					if (!isEnabled) mat.EnableKeyword("_EMISSION");
+				}
+				else
+				{
+					var wasEnabled = (_prevEmissionKeywordEnabledPerMat != null && i < _prevEmissionKeywordEnabledPerMat.Length)
+						? _prevEmissionKeywordEnabledPerMat[i]
+						: _prevEmissionKeywordEnabled;
+					if (isEnabled && !wasEnabled) mat.DisableKeyword("_EMISSION");
+				}
+			}
+		}
     }
 
     // Строит снимок показаний по текущему шагу и передаёт его во view или очищает тексты.
@@ -161,24 +188,7 @@ public sealed class MultimeterHoverEmissionController : MonoBehaviour
     {
         if (!_view.HasAnyBinding) return;
 
-        if (primaryDialRenderer == null || !_dialRegistered)
-        {
-            _view.Clear();
-            return;
-        }
-
         var snapshot = MultimeterReadoutCalculator.BuildSnapshot(_dialStep);
         _view.Render(snapshot);
-    }
-
-    // Восстанавливает исходную эмиссию и сбрасывает ссылку на подсвеченный рендерер.
-    private void ClearHoverHighlight()
-    {
-        if (_hoverRenderer == null) return;
-
-        _hoverRenderer.GetPropertyBlock(_block);
-        _block.SetColor("_EmissionColor", _baseEmission);
-        _hoverRenderer.SetPropertyBlock(_block);
-        _hoverRenderer = null;
     }
 }
