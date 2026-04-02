@@ -881,10 +881,10 @@ MonoBehaviour:
   raycastCamera: {fileID: 963194227}
   hoverEmissionColor: {r: 0.3962264, g: 0.36047497, b: 0.26726592, a: 0.019607844}
   hoverEmissionIntensity: 1.7
-  totalSlots: 7
   displayValueText: {fileID: 1955934689}
-  combinedModeAndValueText: {fileID: 1916591274}
+  uiModeAndValueText: {fileID: 1916591274}
   primaryDialRenderer: {fileID: 1117855849}
+  raycastMaxDistance: 100
 --- !u!4 &2128213531
 Transform:
   m_ObjectHideFlags: 0
